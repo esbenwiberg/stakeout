@@ -26,6 +26,13 @@ jobs:
       - uses: esbenwiberg/stakeout@main
 ```
 
+Pin to a specific release tag rather than `@main` — `@main` is a mutable
+reference and could change under you:
+
+```yaml
+      - uses: esbenwiberg/stakeout@v1
+```
+
 The action diffs `pnpm-lock.yaml` and/or `package-lock.json` at the repo root
 against the PR's base branch and exits:
 
@@ -149,6 +156,27 @@ Offline, zero-dependency:
 ```bash
 node --test tests/stakeout.test.mjs
 ```
+
+## Locking `package.json` versions
+
+stakeout catches too-young versions that appear in the lockfile diff, but `^`
+and `~` ranges in `package.json` mean a fresh `npm install` or `pnpm install`
+can silently resolve to a newer version — bypassing the lockfile if it's ever
+regenerated. Use exact versions so the lockfile is the only place versions
+change, and every bump surfaces as a diff that stakeout will catch.
+
+**npm** — add to `.npmrc`:
+```
+save-exact=true
+```
+
+**pnpm** — add to `.npmrc`:
+```
+save-exact=true
+```
+
+With exact pins, the only way a new version enters the lockfile is an explicit
+`npm update` / `pnpm update`, which produces a lockfile diff on the PR.
 
 ## Scope notes
 
