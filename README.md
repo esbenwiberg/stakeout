@@ -77,6 +77,52 @@ the verification degrades (exemption accepted with a warning and an
 The cheapest fix for a violation is usually to wait: every violation is
 reported with the date the version becomes eligible. Rebase after that date.
 
+### Creating or updating `.stakeout.yml`
+
+The file is optional — if it's absent, built-in defaults apply (`minimumAgeDays: 7`,
+`failOn: violation`, public npm registry). Create it in the repo root when you need
+to change a default or manage exemptions.
+
+**Common workflows:**
+
+**1. Wait and rebase (no config change needed)**
+The check output prints `eligible on YYYY-MM-DD` for each violation. Once that
+date passes, rebasing the PR will make the check pass with no config edits.
+
+**2. Add a CVE exemption for a security bump that can't wait**
+
+```yaml
+# .stakeout.yml
+exemptions:
+  - package: lodash
+    version: 4.17.25
+    reason: CVE-2026-1234   # must be a real CVE / GHSA / OSV id
+    expires: 2026-07-01     # set ~2–4 weeks out; expired entries are flagged stale
+```
+
+`reason` is verified against OSV.dev by default — it must be an advisory that
+actually affects the version you're upgrading *away from*. Set a short `expires`
+date; once the version ages past `minimumAgeDays` naturally you can remove the
+entry (or leave it — stale exemptions are reported as warnings, not failures).
+
+**3. Skip a private package scope**
+
+If your registry 404s on packages from an internal feed, stakeout skips them
+with a warning. To suppress the warning and avoid any accidental public-registry
+name collision, list the scope:
+
+```yaml
+# .stakeout.yml
+skipScopes:
+  - "@mycompany"
+```
+
+**4. Roll out gradually with `failOn: warn`**
+
+Set `failOn: warn` while bedding the gate in — violations are reported but the
+check exits 0, so PRs still merge. Flip to `violation` once the team is used to
+the workflow.
+
 ## Local / CI-less usage
 
 ```bash
