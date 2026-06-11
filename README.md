@@ -157,6 +157,86 @@ Offline, zero-dependency:
 node --test tests/stakeout.test.mjs
 ```
 
+## Hands-off auto-updates with Dependabot
+
+Dependabot opens a PR the moment a new version is published — stakeout will
+fail it if the version is under the minimum age. GitHub does not retry failed
+checks automatically, so without intervention the PR sits failing until someone
+manually rebases it.
+
+The solution is a daily retry workflow that re-runs stakeout on open Dependabot
+PRs. Once a version ages past the threshold the check turns green; combine with
+Dependabot auto-merge for a fully hands-off flow.
+
+**1. `.github/dependabot.yml`** — weekly grouped updates, no majors:
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      patch-and-minor:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+```
+
+**2. `.github/workflows/stakeout-retry.yml`** — daily re-run on Dependabot PRs:
+
+```yaml
+name: stakeout retry
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Re-run stakeout on open Dependabot PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --author app/dependabot \
+            --state open \
+            --json number,headRefName \
+            --jq '.[]' | \
+          while IFS= read -r pr; do
+            number=$(echo "$pr" | jq -r '.number')
+            branch=$(echo "$pr" | jq -r '.headRefName')
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow stakeout.yml \
+              --branch "$branch" \
+              --status failure \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [ -n "$run_id" ]; then
+              echo "Re-running stakeout for PR #$number (run $run_id)"
+              gh run rerun "$run_id"
+            fi
+          done
+```
+
+**3. Enable auto-merge** on Dependabot PRs (repo settings → "Allow auto-merge"), then
+add `gh pr merge --auto --squash` to your stakeout workflow on success, or enable
+Dependabot auto-merge via [repository rules](https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions#auto-merge-a-pull-request).
+
+Full flow: Dependabot opens PR → stakeout may fail (too young) → daily retry
+re-runs the check → version ages out → stakeout passes → auto-merge fires.
+
 ## Locking `package.json` versions
 
 stakeout catches too-young versions that appear in the lockfile diff, but `^`
