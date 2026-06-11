@@ -237,6 +237,11 @@ Dependabot auto-merge via [repository rules](https://docs.github.com/en/code-sec
 Full flow: Dependabot opens PR → stakeout may fail (too young) → daily retry
 re-runs the check → version ages out → stakeout passes → auto-merge fires.
 
+> **Note:** failed check runs during the waiting window are expected and not a
+> sign of breakage — stakeout will fail the PR for up to `minimumAgeDays` days,
+> then pass once the version is old enough. Dependabot leaves the PR open
+> throughout; it does not re-create it on CI failure.
+
 ## Locking `package.json` versions
 
 stakeout catches too-young versions that appear in the lockfile diff, but `^`
