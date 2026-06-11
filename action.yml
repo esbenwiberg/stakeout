@@ -1,0 +1,42 @@
+name: stakeout
+description: >-
+  Fail PRs whose lockfile diff introduces npm package versions younger than
+  the configured minimum age, unless covered by a CVE exemption in .stakeout.yml.
+inputs:
+  config:
+    description: Path to the stakeout config file
+    required: false
+    default: .stakeout.yml
+  base-ref:
+    description: Base ref to diff the lockfile against (defaults to the PR base branch)
+    required: false
+    default: ""
+  report:
+    description: Where to write the machine-readable JSON report
+    required: false
+    default: stakeout-report.json
+runs:
+  using: composite
+  steps:
+    - name: Check lockfile package ages
+      shell: bash
+      env:
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        INPUT_REPORT: ${{ inputs.report }}
+      run: |
+        set -euo pipefail
+        BASE="${INPUT_BASE_REF:-${GITHUB_BASE_REF:-}}"
+        if [ -z "$BASE" ]; then
+          echo "::error::stakeout: no base ref — run on pull_request events or set the base-ref input"
+          exit 2
+        fi
+        git fetch --quiet --depth=1 origin "$BASE"
+        ARGS=(check --base-ref FETCH_HEAD --report "$INPUT_REPORT")
+        if [ -f "$INPUT_CONFIG" ]; then
+          ARGS+=(--config "$INPUT_CONFIG")
+        elif [ "$INPUT_CONFIG" != ".stakeout.yml" ]; then
+          echo "::error::stakeout: config file not found: $INPUT_CONFIG"
+          exit 2
+        fi
+        node "$GITHUB_ACTION_PATH/stakeout.mjs" "${ARGS[@]}"

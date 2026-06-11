@@ -1,0 +1,15 @@
+# Fixture config used by tests. Pair with --now 2026-06-15T00:00:00Z.
+minimumAgeDays: 7
+failOn: violation
+verifyCveExemptions: true
+skipScopes:
+  - "@contextand"
+exemptions:
+  - package: lodash
+    version: 4.17.25
+    reason: CVE-2026-1234
+    expires: 2026-12-31
+  - package: minimist
+    version: 1.2.9
+    reason: CVE-2020-7598
+    expires: 2026-01-01   # expired relative to test --now → stale

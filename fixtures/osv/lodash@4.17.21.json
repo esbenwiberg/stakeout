@@ -1,0 +1,9 @@
+{
+  "vulns": [
+    {
+      "id": "GHSA-aaaa-bbbb-cccc",
+      "aliases": ["CVE-2026-1234"],
+      "summary": "Fixture vulnerability affecting lodash 4.17.21, fixed in 4.17.25"
+    }
+  ]
+}

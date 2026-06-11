@@ -1,0 +1,30 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      lodash:
+        specifier: ^4.17.21
+        version: 4.17.21
+      '@contextand/utils':
+        specifier: ^1.0.0
+        version: 1.0.0
+
+packages:
+
+  '@contextand/utils@1.0.0':
+    resolution: {integrity: sha512-internalfixture0000000000000000000000000000==}
+
+  debug@4.4.0(supports-color@8.1.1):
+    resolution: {integrity: sha512-debugfixture00000000000000000000000000000000==}
+
+  lodash@4.17.21:
+    resolution: {integrity: sha512-lodashfixture0000000000000000000000000000000==}
+
+  ms@2.1.3:
+    resolution: {integrity: sha512-msfixture00000000000000000000000000000000000==}

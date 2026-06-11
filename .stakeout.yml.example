@@ -1,0 +1,30 @@
+# stakeout configuration — copy to .stakeout.yml in the repo root.
+# Every key is optional; the values below are the defaults.
+
+# A new (package, version) pair must be at least this many days old.
+minimumAgeDays: 7
+
+# violation: violations fail the build (exit 1).
+# warn: violations are reported but exit 0 — useful while bedding the gate in.
+# Operational errors (exit 2) stay red in both modes.
+failOn: violation
+
+# Where publish dates are fetched from. Point at an internal feed if needed.
+registry: https://registry.npmjs.org
+
+# Verify exemption advisory ids against OSV.dev (rejects fabricated CVEs).
+verifyCveExemptions: true
+
+# Package scopes to skip entirely — private packages that don't exist on the
+# public registry.
+skipScopes:
+  - "@contextand"
+
+# Exemptions let a too-young version through. Use them for security bumps
+# that cannot wait. reason must be a CVE/GHSA/OSV id; expires is mandatory —
+# expired entries are ignored and reported as stale so the file self-cleans.
+exemptions:
+  - package: lodash
+    version: 4.17.25
+    reason: CVE-2026-1234
+    expires: 2026-07-01
