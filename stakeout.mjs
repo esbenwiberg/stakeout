@@ -40,6 +40,10 @@ export const DEFAULTS = Object.freeze({
   exemptions: [],
 });
 
+function defaultConfig() {
+  return { ...DEFAULTS, skipScopes: [], exemptions: [] };
+}
+
 const ADVISORY_ID = /^(CVE-\d{4}-\d{4,}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}|OSV-\S+)$/i;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -90,7 +94,7 @@ export function parseConfigYaml(text, source) {
 }
 
 export function validateConfig(raw, source) {
-  const cfg = { ...DEFAULTS, skipScopes: [], exemptions: [] };
+  const cfg = defaultConfig();
   for (const [key, value] of Object.entries(raw)) {
     switch (key) {
       case "minimumAgeDays":
@@ -146,15 +150,19 @@ function validateExemption(raw, where) {
   return { package: String(raw.package), version: String(raw.version), reason, expires };
 }
 
+export function loadConfigText(text, source) {
+  return validateConfig(parseConfigYaml(text, source), source);
+}
+
 export function loadConfig(path) {
-  if (!path) return { ...DEFAULTS };
+  if (!path) return defaultConfig();
   let text;
   try {
     text = readFileSync(path, "utf8");
   } catch (e) {
     throw new OperationalError(`cannot read config ${path}: ${e.message}`);
   }
-  return validateConfig(parseConfigYaml(text, path), path);
+  return loadConfigText(text, path);
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +376,7 @@ export async function verifyExemption({ exemption, baseVersion, osvFixtureDir, f
 // Core check
 // ---------------------------------------------------------------------------
 
-export async function runCheck({ base, head, config, now = new Date(), registryOpts = {}, osvFixtureDir }) {
+export async function runCheck({ base, head, config, now = new Date(), registryOpts = {}, osvFixtureDir, policy }) {
   const changed = diffLockfiles(base, head, config.skipScopes);
   const results = [];
   if (changed.length > 0) {
@@ -432,6 +440,7 @@ export async function runCheck({ base, head, config, now = new Date(), registryO
     now: now.toISOString(),
     minimumAgeDays: config.minimumAgeDays,
     failOn: config.failOn,
+    ...(policy ? { policy } : {}),
     results,
     summary,
     exitCode,
@@ -442,9 +451,19 @@ export async function runCheck({ base, head, config, now = new Date(), registryO
 // Reporting
 // ---------------------------------------------------------------------------
 
+function renderPolicyNotice(report) {
+  const change = report.policy?.configChange;
+  if (!change) return "";
+  return (
+    `stakeout: policy file ${change.path} was ${change.status} in this PR; ` +
+    `this run used ${report.policy.configSource}. Policy changes take effect after merge.\n`
+  );
+}
+
 export function renderTable(report) {
+  const policyNotice = renderPolicyNotice(report);
   if (report.results.length === 0)
-    return `stakeout: no new package versions in lockfile diff — nothing to check.\n`;
+    return policyNotice + `stakeout: no new package versions in lockfile diff — nothing to check.\n`;
   const rows = [["PACKAGE", "VERSION", "PUBLISHED", "AGE", "STATUS", "DETAIL"]];
   for (const r of report.results) {
     let detail = "";
@@ -475,24 +494,35 @@ export function renderTable(report) {
       `${s.exempted} exempted, ${s["stale-exemption"]} stale exemption(s), ` +
       `${s.skipped} skipped, ${s.error} error(s). Minimum age: ${report.minimumAgeDays} day(s).`
   );
-  return lines.join("\n") + "\n";
+  return policyNotice + lines.join("\n") + "\n";
 }
 
 function writeStepSummary(report) {
   const path = process.env.GITHUB_STEP_SUMMARY;
-  if (!path || report.results.length === 0) return;
+  if (!path || (report.results.length === 0 && !report.policy?.configChange)) return;
   const lines = [
     `### stakeout — minimum package age ${report.minimumAgeDays}d`,
     "",
-    "| package | version | published | age | status |",
-    "|---|---|---|---|---|",
-    ...report.results.map(
-      (r) =>
-        `| ${r.name} | ${r.version} | ${r.publishedAt?.slice(0, 10) ?? "-"} | ` +
-        `${r.ageDays ?? "-"} | ${r.status} |`
-    ),
-    "",
   ];
+  const change = report.policy?.configChange;
+  if (change) {
+    lines.push(
+      `> Policy file \`${change.path}\` was ${change.status} in this PR; this run used \`${report.policy.configSource}\`. Policy changes take effect after merge.`,
+      ""
+    );
+  }
+  if (report.results.length > 0) {
+    lines.push(
+      "| package | version | published | age | status |",
+      "|---|---|---|---|---|",
+      ...report.results.map(
+        (r) =>
+          `| ${r.name} | ${r.version} | ${r.publishedAt?.slice(0, 10) ?? "-"} | ` +
+          `${r.ageDays ?? "-"} | ${r.status} |`
+      ),
+      ""
+    );
+  }
   appendFileSync(path, lines.join("\n"));
 }
 
@@ -501,11 +531,56 @@ function writeStepSummary(report) {
 // ---------------------------------------------------------------------------
 
 function gitShow(ref, path) {
+  return gitShowOptional(ref, path).text;
+}
+
+function gitShowOptional(ref, path) {
   try {
-    return execFileSync("git", ["show", `${ref}:${path}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return {
+      found: true,
+      text: execFileSync("git", ["show", `${ref}:${path}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+    };
   } catch {
-    return ""; // file absent in base ref → every pair is new
+    return { found: false, text: "" };
   }
+}
+
+function readFileOptional(path) {
+  if (!existsSync(path)) return { found: false, text: "" };
+  return { found: true, text: readFileSync(path, "utf8") };
+}
+
+function changedFileStatus(baseFile, headFile) {
+  if (!baseFile.found && headFile.found) return "added";
+  if (baseFile.found && !headFile.found) return "deleted";
+  if (baseFile.found && headFile.found && baseFile.text !== headFile.text) return "modified";
+  return null;
+}
+
+function loadGitModeConfig({ ref, configPath, required }) {
+  const baseConfigFile = gitShowOptional(ref, configPath);
+  let config;
+  let configSource;
+  if (baseConfigFile.found) {
+    configSource = `${ref}:${configPath}`;
+    config = loadConfigText(baseConfigFile.text, configSource);
+  } else {
+    if (required) throw new OperationalError(`config file not found in base ref: ${configPath}`);
+    configSource = "built-in defaults";
+    config = defaultConfig();
+  }
+
+  const headConfigFile = readFileOptional(configPath);
+  const status = changedFileStatus(baseConfigFile, headConfigFile);
+  const policy = { configPath, configSource };
+  if (status) {
+    policy.configChange = {
+      path: configPath,
+      status,
+      baseRef: ref,
+    };
+  }
+  return { config, policy };
 }
 
 export async function main(argv) {
@@ -526,16 +601,14 @@ export async function main(argv) {
   if (positionals[0] !== "check")
     throw new OperationalError(`usage: stakeout.mjs check [--base F --head F | --base-ref REF] [--config F]`);
 
-  let configPath = values.config;
-  if (!configPath && existsSync(".stakeout.yml")) configPath = ".stakeout.yml";
-  const config = loadConfig(configPath);
-
   const now = values.now ? new Date(values.now) : new Date();
   if (Number.isNaN(now.getTime())) throw new OperationalError(`invalid --now value "${values.now}"`);
 
   // Resolve base/head lockfile contents: explicit file pair, or git diff mode.
   const base = new Map();
   const head = new Map();
+  let config;
+  let policy;
   const merge = (into, parsed) =>
     parsed.forEach((versions, name) => {
       if (!into.has(name)) into.set(name, new Set());
@@ -545,11 +618,20 @@ export async function main(argv) {
   if (values.base || values.head) {
     if (!values.base || !values.head)
       throw new OperationalError("--base and --head must be given together");
+    let configPath = values.config;
+    if (!configPath && existsSync(".stakeout.yml")) configPath = ".stakeout.yml";
+    config = loadConfig(configPath);
     merge(base, parseLockfile(readFileSync(values.base, "utf8"), values.base));
     merge(head, parseLockfile(readFileSync(values.head, "utf8"), values.head));
   } else {
     const ref = values["base-ref"];
     if (!ref) throw new OperationalError("either --base/--head or --base-ref is required");
+    const configPath = values.config ?? ".stakeout.yml";
+    ({ config, policy } = loadGitModeConfig({
+      ref,
+      configPath,
+      required: values.config !== undefined && configPath !== ".stakeout.yml",
+    }));
     const present = LOCKFILE_NAMES.filter((f) => existsSync(f));
     if (present.length === 0)
       throw new OperationalError(`no supported lockfile found (looked for: ${LOCKFILE_NAMES.join(", ")})`);
@@ -569,11 +651,19 @@ export async function main(argv) {
     now,
     registryOpts: values["registry-fixture"] ? { fixtureDir: values["registry-fixture"] } : {},
     osvFixtureDir: values["osv-fixture"],
+    policy,
   });
 
   process.stdout.write(renderTable(report));
   writeFileSync(values.report, JSON.stringify(report, null, 2) + "\n");
   writeStepSummary(report);
+  if (report.policy?.configChange) {
+    const change = report.policy.configChange;
+    console.error(
+      `::warning file=${change.path}::stakeout policy file was ${change.status} in this PR; ` +
+        `using ${report.policy.configSource}. Policy changes take effect after merge.`
+    );
+  }
   for (const r of report.results) {
     if (r.status === "violation" || r.status === "stale-exemption")
       console.error(`::error::stakeout: ${r.name}@${r.version} is ${r.ageDays}d old (< ${config.minimumAgeDays}d), eligible on ${r.eligibleOn}`);

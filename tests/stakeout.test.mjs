@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFileSync, mkdtempSync, copyFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, copyFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -367,18 +367,77 @@ test("cli git mode: consumer repo with no .stakeout.yml works on defaults", asyn
     }
   };
 
-  // No config file → defaults; diff is only the lodash bump → violation.
+  // No config file -> defaults; diff is only the lodash bump -> violation.
   let { exitCode, report } = await run();
   assert.equal(exitCode, 1);
   assert.equal(report.minimumAgeDays, DEFAULTS.minimumAgeDays);
   assert.deepEqual(report.results.map((r) => `${r.name}@${r.version}:${r.status}`), ["lodash@4.17.22:violation"]);
 
-  // Dropping a .stakeout.yml with a matching exemption is picked up automatically.
-  copyFileSync(join(FIX, "lock-cve-exempt-bump.yaml"), join(repo, "pnpm-lock.yaml"));
-  copyFileSync(join(FIX, "stakeout.yml"), join(repo, ".stakeout.yml"));
+  // Dropping a weaker .stakeout.yml into the PR is reported, but not trusted.
+  writeFileSync(
+    join(repo, ".stakeout.yml"),
+    "minimumAgeDays: 0\nfailOn: warn\nverifyCveExemptions: false\n"
+  );
   ({ exitCode, report } = await run());
+  assert.equal(exitCode, 1);
+  assert.equal(report.minimumAgeDays, DEFAULTS.minimumAgeDays);
+  assert.equal(report.failOn, DEFAULTS.failOn);
+  assert.deepEqual(report.policy.configChange, {
+    path: ".stakeout.yml",
+    status: "added",
+    baseRef: "main",
+  });
+  assert.equal(report.results.find((r) => r.name === "lodash").status, "violation");
+});
+
+test("cli git mode: base branch .stakeout.yml is the source of truth", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "stakeout-consumer-"));
+  const sh = promisify(execFile);
+  const g = (...args) => sh("git", args, { cwd: repo });
+  await g("init", "-q", "-b", "main");
+  await g("config", "user.email", "t@t");
+  await g("config", "user.name", "t");
+  await g("config", "commit.gpgsign", "false");
+  copyFileSync(join(FIX, "lock-base.yaml"), join(repo, "pnpm-lock.yaml"));
+  copyFileSync(join(FIX, "stakeout.yml"), join(repo, ".stakeout.yml"));
+  await g("add", "-A");
+  await g("commit", "-qm", "base with policy");
+  await g("checkout", "-qb", "feature");
+
+  const run = async () => {
+    try {
+      await sh(
+        "node",
+        [join(ROOT, "stakeout.mjs"), "check", "--base-ref", "main",
+         "--registry-fixture", join(FIX, "registry"), "--osv-fixture", join(FIX, "osv"),
+         "--now", NOW.toISOString()],
+        { cwd: repo }
+      );
+      return { exitCode: 0, report: JSON.parse(readFileSync(join(repo, "stakeout-report.json"), "utf8")) };
+    } catch (e) {
+      return { exitCode: e.code, report: JSON.parse(readFileSync(join(repo, "stakeout-report.json"), "utf8")) };
+    }
+  };
+
+  copyFileSync(join(FIX, "lock-cve-exempt-bump.yaml"), join(repo, "pnpm-lock.yaml"));
+  let { exitCode, report } = await run();
   assert.equal(exitCode, 0);
+  assert.equal(report.policy.configSource, "main:.stakeout.yml");
+  assert.equal(report.policy.configChange, undefined);
   assert.equal(report.results.find((r) => r.name === "lodash").status, "exempted");
+
+  writeFileSync(join(repo, ".stakeout.yml"), "minimumAgeDays: 0\nfailOn: warn\n");
+  copyFileSync(join(FIX, "lock-fresh-bump.yaml"), join(repo, "pnpm-lock.yaml"));
+  ({ exitCode, report } = await run());
+  assert.equal(exitCode, 1);
+  assert.equal(report.minimumAgeDays, 7);
+  assert.equal(report.failOn, "violation");
+  assert.deepEqual(report.policy.configChange, {
+    path: ".stakeout.yml",
+    status: "modified",
+    baseRef: "main",
+  });
+  assert.equal(report.results.find((r) => r.name === "lodash").status, "violation");
 });
 
 test("cli: npm lockfile pair detects the same violation", async () => {

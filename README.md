@@ -49,7 +49,7 @@ summary table is appended to the GitHub step summary.
 
 | input | default | |
 |---|---|---|
-| `config` | `.stakeout.yml` | Config path; missing default file → built-in defaults |
+| `config` | `.stakeout.yml` | Config path; in PR/git mode, loaded from the base ref; missing default file → built-in defaults |
 | `base-ref` | PR base branch | Override what to diff against |
 | `report` | `stakeout-report.json` | JSON report path |
 
@@ -71,6 +71,13 @@ exemptions:
 
 Unknown keys are rejected. See `.stakeout.yml.example` for a commented copy.
 
+When the GitHub Action or `--base-ref` mode runs on a PR, stakeout loads this
+file from the base branch, not from the PR workspace. A PR may propose changes
+to `.stakeout.yml`, and stakeout reports that loudly, but those changes only
+take effect after merge. This prevents a PR from lowering `minimumAgeDays`,
+switching `failOn` to `warn`, disabling CVE verification, or adding broad skips
+to pass itself.
+
 ### Exemptions
 
 A version younger than the threshold passes only if an exemption matches its
@@ -88,7 +95,9 @@ reported with the date the version becomes eligible. Rebase after that date.
 
 The file is optional — if it's absent, built-in defaults apply (`minimumAgeDays: 7`,
 `failOn: violation`, public npm registry). Create it in the repo root when you need
-to change a default or manage exemptions.
+to change a default or manage exemptions. On PRs, changes to this file are policy
+proposals: they are reported during the run, then used by future PRs only after
+they have landed on the base branch.
 
 **Common workflows:**
 
@@ -143,11 +152,14 @@ used by the offline test suite).
 
 ## Report schema
 
-`stakeout-report.json`: `{ schemaVersion, now, minimumAgeDays, failOn, results,
-summary, exitCode }` where each result is
+`stakeout-report.json`: `{ schemaVersion, now, minimumAgeDays, failOn, policy?,
+results, summary, exitCode }` where each result is
 `{ name, version, baseVersion?, publishedAt?, ageDays?, eligibleOn?, status,
 exemption?, note?, error? }` and `status` is one of
 `pass | violation | exempted | stale-exemption | skipped | error`.
+
+In PR/git mode, `policy` records the config source and any config-file change
+seen in the PR, for example `{ configPath, configSource, configChange? }`.
 
 ## Tests
 

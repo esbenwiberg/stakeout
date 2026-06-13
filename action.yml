@@ -32,11 +32,5 @@ runs:
           exit 2
         fi
         git fetch --quiet --depth=1 origin "$BASE"
-        ARGS=(check --base-ref FETCH_HEAD --report "$INPUT_REPORT")
-        if [ -f "$INPUT_CONFIG" ]; then
-          ARGS+=(--config "$INPUT_CONFIG")
-        elif [ "$INPUT_CONFIG" != ".stakeout.yml" ]; then
-          echo "::error::stakeout: config file not found: $INPUT_CONFIG"
-          exit 2
-        fi
+        ARGS=(check --base-ref FETCH_HEAD --report "$INPUT_REPORT" --config "$INPUT_CONFIG")
         node "$GITHUB_ACTION_PATH/stakeout.mjs" "${ARGS[@]}"
